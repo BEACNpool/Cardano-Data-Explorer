@@ -26,6 +26,14 @@ Its purpose is **depth, reproducibility, transparency, and analytical power**.
 
 ---
 
+# 1.1 What this blueprint intentionally does not cover
+
+- specific cloud vendor choices
+- specific hardware brand/size
+- exact snapshot acquisition workflow
+
+This document focuses on **core infrastructure design and reproducible build order**.
+
 # 2. Core Doctrine
 
 ## 2.1 Snapshot-first, not live-query
@@ -76,6 +84,10 @@ If a claim cannot be tied back to evidence and snapshot provenance, it is not ye
 
 This project works best when split into three logical roles.
 
+> You can run all three roles on **one machine** (single-host mode) or split them across multiple machines (split-host mode).
+> The architecture is logical first; host count is an implementation choice.
+
+
 ## 3.1 Sync Source
 
 **Role:** chain sync and raw db-sync source
@@ -107,7 +119,7 @@ This project works best when split into three logical roles.
 
 ---
 
-## 3.3 Control Plane / Ops Box
+## 3.3 Control Plane
 
 **Role:** orchestration, operator workspace, agent control plane
 
@@ -122,6 +134,25 @@ This project works best when split into three logical roles.
 This machine is the **brain / operator station**, not necessarily the permanent warehouse host.
 
 ---
+
+## 3.4 Single-host deployment (copy-friendly default)
+
+If you only have one server/desktop, use this default:
+
+- Run `cardano-node` + `cardano-db-sync` + PostgreSQL source on the same machine
+- Restore snapshots into a separate database (or separate cluster) on the same machine
+- Keep analytical queries pointed at the restored warehouse database, not your live sync write path
+- Keep clear directory separation for incoming/state/logs/archive
+
+Minimal practical goal:
+
+- one host
+- two logical databases (`cardano_raw`, `cardano_intel`)
+- deterministic ETL pipeline
+- snapshot provenance tables
+
+This gives reproducibility without requiring a multi-host setup.
+
 
 # 4. Bot / Agent Policy
 
@@ -193,7 +224,7 @@ When in doubt:
                │ orchestrates / inspects / manages
                │
 ┌──────────────────────────────┐
-│ Control Plane / Ops Box      │
+│ Control Plane      │
 │                              │
 │ agents / automation          │
 │ runbooks                     │
@@ -235,7 +266,7 @@ Purpose:
 
 ## 7.1 Snapshot lifecycle
 
-### Step 1 — Export snapshot from the sync source
+### Step 1 — Obtain a snapshot dump pair
 Naming standard:
 
 ```text
@@ -251,7 +282,7 @@ dbsync_epoch_{epoch}_slot_{slot}.dump
 dbsync_epoch_{epoch}_slot_{slot}.meta.json
 ```
 
-### Step 2 — Transfer to warehouse host
+### Step 2 — Place dump pair in your warehouse incoming path
 The `.dump` and `.meta.json` should always remain paired.
 
 ### Step 3 — Restore into `cardano_raw`
@@ -295,7 +326,7 @@ Freshness is chosen based on investigative need, not explorer-style latency expe
 
 # 9. Canonical Filesystem Pattern
 
-This blueprint intentionally avoids environment-specific paths. A simple recommended pattern is:
+This blueprint intentionally avoids environment-specific host names and paths. Use this portable layout on any Linux host:
 
 ```text
 /data/cardano-intel/
@@ -619,7 +650,7 @@ Automatically fall back to a **full rebuild** when:
 # 17. Suggested Repo Structure
 
 ```text
-lantern-cardano/
+cardano-data-explorer/
 ├─ README.md
 ├─ docs/
 │  ├─ Cardano Data Explorer_Blueprint.md
