@@ -1,0 +1,14 @@
+{
+  "snapshot_tag": "dbsync_epoch_000_slot_000",
+  "epoch_no": 0,
+  "slot_no": 0,
+  "block_no": 0,
+  "block_hash": "<block_hash_here>",
+  "block_time_utc": "2026-01-01T00:00:00Z",
+  "source_host": "sync-source-hostname",
+  "dump_file": "dbsync_epoch_000_slot_000.dump",
+  "dump_size_bytes": 0,
+  "sha256": "<sha256_here>",
+  "exported_at_utc": "2026-01-01T00:00:00Z",
+  "notes": "Optional notes"
+}
