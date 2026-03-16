@@ -2,27 +2,26 @@
 
 **Version:** Public Community Edition v1  
 **Date:** 2026-03-16  
-**Status:** Community blueprint for building a snapshot-based Cardano explorer and analytics stack  
+**Status:** Community blueprint for building a comprehensive Cardano data explorer
 **Primary audience:** builders, operators, researchers, contributors
 
 ---
 
 # 1. Mission
 
-**Cardano Data Explorer** is a blueprint for turning a raw `cardano-db-sync` dataset into a **forensic-grade Cardano analysis and explorer system** capable of:
+**Cardano Data Explorer** is a blueprint for turning a `cardano-db-sync` PostgreSQL database into a **comprehensive, fast, and accessible Cardano data explorer** capable of:
 
-- historical chain analysis
-- staking and delegation intelligence
-- multi-hop value tracing
-- pool and entity profiling
+- looking up any transaction, address, UTxO, or native asset on the Cardano ledger
+- staking and delegation intelligence (pools, stake accounts, rewards)
+- multi-hop value tracing through projected graph edges
+- pool profiling and delegation analytics
 - governance and DRep analysis
 - graph-based relationship analysis
-- evidence-first labeling and casework
-- AI-assisted investigation and summarization
+- historical chain analysis across all eras (Byron → Shelley → Alonzo → Babbage → Conway)
 
-Cardano Data Explorer is **not** designed primarily as a tip-of-chain explorer.
+The primary architecture uses **db-sync + materialized views** for near-real-time data with fast query performance. An optional snapshot mode is available for reproducible point-in-time research.
 
-Its purpose is **depth, reproducibility, transparency, and analytical power**.
+See [`ARCHITECTURE_REVIEW.md`](ARCHITECTURE_REVIEW.md) for a detailed comparison of approaches.
 
 ---
 
@@ -36,23 +35,32 @@ This document focuses on **core infrastructure design and reproducible build ord
 
 # 2. Core Doctrine
 
-## 2.1 Snapshot-first, not live-query
+## 2.1 Materialized views over raw queries
 
-Cardano Data Explorer runs on **periodic PostgreSQL snapshots** exported from a `cardano-db-sync` PostgreSQL database and imported into an isolated analysis environment.
+Cardano Data Explorer uses **pre-computed materialized views** built on top of `cardano-db-sync` tables to deliver fast lookups without hammering the raw indexed data.
 
-This is a deliberate design choice.
+### Primary mode: db-sync + materialized views
 
-### Why this model exists
+- `cardano-db-sync` writes continuously to PostgreSQL as the chain advances.
+- A **read replica** (or the same instance on single-host setups) serves all analytical queries.
+- **Materialized views** in dedicated schemas (`intel_core`, `intel_graph`, `intel_analytics`) pre-compute common queries for fast access.
+- Views are refreshed on a schedule (every epoch, hourly, or on-demand).
 
-- The sync node’s job is to **sync the chain**.
-- The analysis environment’s job is to **think**.
-- Heavy analytical queries should not compete with chain sync duties.
-- Reproducible investigations require a **fixed point-in-time dataset**.
-- Derived layers should rebuild against a stable base, not a moving target.
+### Optional mode: snapshot-based research
+
+For reproducible forensic analysis, the platform also supports periodic `pg_dump` snapshots imported into an isolated database. This mode is useful for point-in-time investigations but is **not the primary data path**.
+
+### Why materialized views instead of snapshot ETL
+
+- Near-real-time data (seconds of replication lag, not hours of snapshot lag)
+- No export/import/restore ceremony — views refresh in-place
+- Queries keep working during refresh (using `REFRESH MATERIALIZED VIEW CONCURRENTLY`)
+- Single database to manage, back up, and tune
+- Lower barrier to entry for new builders
 
 ### Operating slogan
 
-**The sync node syncs. The warehouse stores. The control plane orchestrates. Cardano Data Explorer thinks.**
+**db-sync indexes the chain. Materialized views make it fast. The explorer makes it accessible.**
 
 ---
 
@@ -727,19 +735,39 @@ That architecture gives builders room to support:
 
 # 20. Immediate Build Order
 
-Build the first production-grade version of these in order:
+### Phase 1 — Core Explorer (get data queryable)
+1. PostgreSQL tuning guide and db-sync setup docs
+2. `intel_core` schema creation migration
+3. `intel_core.address_summary` — balance, tx count, first/last seen per address
+4. `intel_core.tx_summary` — enriched transaction view with resolved inputs and outputs
+5. `intel_core.stake_summary` — delegation history, rewards, pool association
+6. `intel_core.pool_summary` — saturation, delegator count, blocks minted, margin
 
-1. `intel_meta.snapshot_registry`
-2. `intel_meta.refresh_log`
-3. `intel_meta.pipeline_checkpoints`
-4. `intel_core.address_summary`
-5. `intel_core.stake_account_summary`
-6. `intel_core.pool_summary`
-7. `intel_labels.entities`
-8. `intel_labels.evidence_registry`
-9. `intel_graph.graph_nodes`
-10. `intel_graph.graph_edges_value`
-11. `intel_analytics.daily_pool_metrics`
-12. internal Superset dashboards
+### Phase 2 — Full Coverage (all major data types)
+7. `intel_core.drep_summary` — voting power, delegator count, votes cast
+8. `intel_core.governance_summary` — proposals, votes, ratification status
+9. `intel_core.asset_summary` — native asset mints, burns, current supply, policy info
+10. `intel_core.epoch_summary` — per-epoch aggregate network stats
+11. Materialized view refresh orchestration (cron/systemd timer)
 
-Once those exist, the system stops being just an idea and starts becoming a real Cardano explorer and intelligence engine.
+### Phase 3 — Graph and Tracing (multi-hop lookups)
+12. `intel_graph.value_edges` — tx input/output edges for hop tracing
+13. `intel_graph.delegation_edges` — delegation relationship edges
+14. Multi-hop trace SQL functions (recursive CTEs on projected edges)
+15. `intel_labels.entities` — known entity labels (exchanges, foundation, pools)
+
+### Phase 4 — API Layer
+16. REST API for address, tx, pool, stake key, DRep, and asset lookups
+17. Hop-tracing API endpoint
+18. Search endpoint (address, tx hash, pool ticker, asset name)
+
+### Phase 5 — Frontend and Visualization
+19. Explorer UI with address, tx, pool, and governance pages
+20. Graph/hop visualization
+21. Network analytics charts
+
+### Optional: Research/Snapshot Mode
+22. Snapshot export/import runbook for point-in-time forensic analysis
+23. `intel_meta.snapshot_registry` for provenance tracking in research mode
+
+Once Phase 1 exists, the system stops being a blueprint and starts being a real Cardano data explorer.

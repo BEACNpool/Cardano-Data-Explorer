@@ -1,6 +1,14 @@
-# Quickstart (Community Edition)
+# Quickstart
 
-This guide gets you from zero to a working snapshot-based Cardano data explorer layout.
+Get from zero to querying Cardano data.
+
+## Prerequisites
+
+- A running `cardano-db-sync` instance with a synced PostgreSQL database
+  - [db-sync setup guide](https://github.com/IntersectMBO/cardano-db-sync)
+  - Or use a [db-sync snapshot](https://github.com/IntersectMBO/cardano-db-sync/releases) to bootstrap faster
+- PostgreSQL 14+ (tuned with [PGTune](https://pgtune.leopard.in.ua/))
+- (Optional) [Apache AGE](https://age.apache.org/) for deep hop tracing
 
 ## 1) Clone
 
@@ -9,56 +17,113 @@ git clone https://github.com/BEACNpool/Cardano-Data-Explorer.git
 cd Cardano-Data-Explorer
 ```
 
-## 2) Copy templates
+## 2) Configure
 
 ```bash
 cp templates/.env.example .env
-cp templates/snapshot.meta.example.json /tmp/snapshot.meta.json
 ```
 
-Edit `.env` for your environment.
+Edit `.env` with your database connection details. If you're running db-sync locally on the default port, the defaults should work — just set `PGDATABASE` to your db-sync database name (usually `cexplorer`).
 
-## 3) Prepare canonical directories (example)
+## 3) Run migrations
 
 ```bash
-sudo mkdir -p /data/cardano-intel/{incoming,archive,state,logs,exports}
-sudo chown -R "$USER":"$USER" /data/cardano-intel
+./scripts/run_migrations.sh
 ```
 
-## 4) Snapshot pair rule (mandatory)
+This creates all schemas and materialized views (with no data yet).
 
-Every import must keep these paired:
+## 4) Populate views (first run)
 
-- `dbsync_epoch_<epoch>_slot_<slot>.dump`
-- `dbsync_epoch_<epoch>_slot_<slot>.meta.json`
+```bash
+# First run must use --full since views have no existing data
+./scripts/refresh_views.sh --full
+```
 
-Never process orphaned files.
+This populates all materialized views. On a full mainnet db-sync database, expect this to take 30–60 minutes for the first run. Subsequent refreshes are faster.
 
-## 5) Build order (first practical milestone)
+## 5) Start querying
 
-Implement in this order:
+```bash
+# Look up an address
+psql -c "SELECT * FROM intel_core.address_summary WHERE address = 'addr1q...'"
 
-1. `intel_meta.snapshot_registry`
-2. `intel_meta.refresh_log`
-3. `intel_meta.pipeline_checkpoints`
-4. `intel_core.address_summary`
-5. `intel_core.stake_account_summary`
-6. `intel_core.pool_summary`
-7. `intel_labels.entities`
-8. `intel_labels.evidence_registry`
-9. `intel_graph.graph_nodes`
-10. `intel_graph.graph_edges_value`
-11. `intel_analytics.daily_pool_metrics`
+# Look up a pool
+psql -c "SELECT * FROM intel_core.pool_summary WHERE ticker_name = 'BEACN'"
 
-## 6) Operations doctrine
+# Look up a DRep
+psql -c "SELECT * FROM intel_core.drep_summary WHERE drep_id = 'drep1...'"
 
-- Read-only checks: safe to automate
-- Write/destructive actions: require explicit approval
-- Always attach snapshot provenance to outputs
+# Epoch stats
+psql -c "SELECT * FROM intel_core.epoch_summary ORDER BY epoch_no DESC LIMIT 5"
 
-## 7) Next steps
+# Multi-hop trace (3 hops from an address)
+./scripts/hop_trace.sh DdzFFzCqrh... 3
 
-- Add SQL files under `sql/migrations/`
-- Add ETL scripts under `scripts/`
-- Add validation checks and tests
-- Stand up Superset/Grafana once base layers are ready
+# Hop trace summary
+./scripts/hop_trace.sh --summary DdzFFzCqrh... 5 1000
+```
+
+## 6) Set up automatic refresh
+
+Add a cron job to refresh views periodically:
+
+```bash
+# Every hour
+0 * * * * /path/to/Cardano-Data-Explorer/scripts/refresh_views.sh >> /data/cardano-intel/logs/refresh.log 2>&1
+```
+
+Or refresh per schema on different schedules:
+
+```bash
+# intel_core every hour (most queried)
+0 * * * * /path/to/scripts/refresh_views.sh intel_core
+# intel_graph every 6 hours (expensive)
+0 */6 * * * /path/to/scripts/refresh_views.sh intel_graph
+# intel_analytics daily
+0 3 * * * /path/to/scripts/refresh_views.sh intel_analytics
+```
+
+## 7) (Optional) Apache AGE for deep hop tracing
+
+If you need 5–50+ hop tracing:
+
+```bash
+# Install AGE (see https://age.apache.org/#download)
+# Then project the graph:
+psql -f sql/intel_graph/project_age_graph.sql
+```
+
+Now you can use Cypher queries:
+
+```sql
+-- Load AGE
+LOAD 'age';
+SET search_path = ag_catalog, "$user", public;
+
+-- Find all paths up to 10 hops from an address
+SELECT * FROM cypher('cardano', $$
+    MATCH path = (seed:Address {addr: 'DdzFFzCqrh...'})-[:SENT*1..10]->(dest)
+    RETURN path
+$$) AS (path agtype);
+```
+
+## What's available after setup
+
+| View | What you can look up |
+|---|---|
+| `intel_core.address_summary` | Any address: balance, tx count, first/last seen |
+| `intel_core.tx_summary` | Any transaction: hash, block, epoch, fee, size |
+| `intel_core.tx_io` | Transaction inputs and outputs with resolved addresses |
+| `intel_core.stake_summary` | Stake addresses: delegation, rewards, balance |
+| `intel_core.pool_summary` | Pools: ticker, stake, delegators, blocks, margin |
+| `intel_core.drep_summary` | DReps: voting power, delegators, vote history |
+| `intel_core.governance_summary` | Governance proposals: votes, status |
+| `intel_core.asset_summary` | Native assets: supply, mints, burns, holders |
+| `intel_core.epoch_summary` | Epochs: blocks, txs, fees, staking, treasury |
+| `intel_graph.value_edges` | Value flow edges for hop tracing |
+| `intel_graph.delegation_edges` | Delegation history edges |
+| `intel_graph.reward_edges` | Reward distribution edges |
+| `intel_analytics.daily_metrics` | Daily network stats |
+| `intel_analytics.pool_epoch_metrics` | Per-pool per-epoch performance |
+| `intel_analytics.delegation_concentration` | Nakamoto coefficient over time |
